@@ -1,0 +1,32 @@
+# Build directories
+build/
+build_x64/
+build_x86/
+dist/
+out/
+
+# IDE/Editor settings
+.vscode/
+.idea/
+*.suo
+*.user
+*.pdb
+*.ipch
+.DS_Store
+
+# Temporary artifacts
+*.log
+*.tmp
+
+# Local configuration & profiles (users should generate their own)
+*.ini
+*.dat
+launcher_games.dat
+fps_config.ini
+
+# Compiled binaries (if they appear in src)
+*.exe
+*.dll
+*.lib
+*.obj
+*.a
