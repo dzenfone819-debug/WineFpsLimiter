@@ -269,6 +269,21 @@ DWORD WINAPI MainThread(LPVOID lpReserved) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
+    // Start a background thread to perform a delayed, safe scan for CommandQueue implementations.
+    // This reduces risk of instability during early startup while still attempting to intercept the real queue.
+    std::thread([](){
+        std::this_thread::sleep_for(std::chrono::seconds(5)); // give process time to finish initialization
+        for (int attempt = 0; attempt < 6; ++attempt) {
+            Log("ScanThread: attempt %d to scan for CommandQueue hooks", attempt+1);
+            extern bool ScanForCommandQueueHooks();
+            if (ScanForCommandQueueHooks()) {
+                Log("ScanThread: successfully installed ExecuteCommandLists hook");
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+        }
+    }).detach();
+
     return TRUE;
 }
 

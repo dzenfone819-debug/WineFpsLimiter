@@ -32,6 +32,10 @@ CreateSwapChainForHwnd_t g_fpCreateSwapChainForHwnd = nullptr;
 typedef HRESULT(__stdcall *Present_t)(IDXGISwapChain*, UINT, UINT);
 Present_t g_fpPresent = nullptr;
 
+// Present1 (for IDXGISwapChain1)
+typedef HRESULT(__stdcall *Present1_t)(IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*);
+Present1_t g_fpPresent1 = nullptr;
+
 typedef HRESULT(__stdcall *ResizeBuffers_t)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
 ResizeBuffers_t g_fpResizeBuffers = nullptr;
 
@@ -55,11 +59,13 @@ ExecuteCommandLists_t g_fpExecuteCommandLists = nullptr;
 
 // --- Hook Implementations ---
 
+// ExecuteCommandLists hook: capture the game's direct command queue when called.
 void __stdcall hookExecuteCommandLists(ID3D12CommandQueue* pQueue, UINT NumCommandLists, ID3D12CommandList* const* ppCommandLists) {
-    if (pQueue->GetDesc().Type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
+    if (pQueue && pQueue->GetDesc().Type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
         g_CapturedCommandQueue = pQueue;
+        Log("Captured DX12 CommandQueue via ExecuteCommandLists: %p", pQueue);
     }
-    g_fpExecuteCommandLists(pQueue, NumCommandLists, ppCommandLists);
+    if (g_fpExecuteCommandLists) g_fpExecuteCommandLists(pQueue, NumCommandLists, ppCommandLists);
 }
 
 HRESULT __stdcall hookCreateCommandQueue(ID3D12Device* pDevice, const D3D12_COMMAND_QUEUE_DESC* pDesc, REFIID riid, void** ppCommandQueue) {
@@ -68,10 +74,14 @@ HRESULT __stdcall hookCreateCommandQueue(ID3D12Device* pDevice, const D3D12_COMM
         if (pDesc->Type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
              ID3D12CommandQueue* queue = (ID3D12CommandQueue*)*ppCommandQueue;
              void** vtable = *reinterpret_cast<void***>(queue);
+             // ExecuteCommandLists vtable index is not 54; try the common index 10 and log results.
              if (g_fpExecuteCommandLists == nullptr) {
-                MH_CreateHook(vtable[54], (LPVOID)hookExecuteCommandLists, (LPVOID*)&g_fpExecuteCommandLists);
-                MH_EnableHook(vtable[54]);
-                Log("DX12 CommandQueue Intercepted.");
+                if (MH_CreateHook(vtable[10], (LPVOID)hookExecuteCommandLists, (LPVOID*)&g_fpExecuteCommandLists) == MH_OK) {
+                    MH_EnableHook(vtable[10]);
+                    Log("DX12 CommandQueue Intercepted (vtable[10]).");
+                } else {
+                    Log("Failed to hook ExecuteCommandLists at vtable[10], skipping.");
+                }
              }
         }
     }
@@ -116,6 +126,7 @@ HRESULT __stdcall hookResizeBuffers(IDXGISwapChain* pSwapChain, UINT BufferCount
 HRESULT __stdcall hookPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags) {
     // Detect Backend
     static int backendType = 0; // 0=Unk, 1=DX11, 2=DX12
+    static bool loggedOnce = false;
     
     if (backendType == 0) {
         ID3D11Device* d3d11 = nullptr;
@@ -131,12 +142,42 @@ HRESULT __stdcall hookPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UIN
         }
     }
 
+    if (!loggedOnce) { Log("hookPresent called, detected backend=%d", backendType); loggedOnce = true; }
+
     CheckLimiter();
 
     if (backendType == 1) RenderDX11(pSwapChain);
     else if (backendType == 2) RenderDX12(pSwapChain);
 
     return g_fpPresent(pSwapChain, SyncInterval, Flags);
+}
+
+// Present1 handler (for IDXGISwapChain1 / DXGI Present1 calls)
+HRESULT __stdcall hookPresent1(IDXGISwapChain1* pSwapChain, UINT SyncInterval, UINT PresentFlags, const DXGI_PRESENT_PARAMETERS* pPresentParameters) {
+    // Detect Backend similarly to hookPresent
+    static int backendType = 0;
+    static bool loggedOnce = false;
+    if (backendType == 0) {
+        ID3D11Device* d3d11 = nullptr;
+        if (SUCCEEDED(((IDXGISwapChain*)pSwapChain)->GetDevice(__uuidof(ID3D11Device), (void**)&d3d11))) {
+            backendType = 1; d3d11->Release();
+        } else {
+            ID3D12Device* d3d12 = nullptr;
+            if (SUCCEEDED(((IDXGISwapChain*)pSwapChain)->GetDevice(__uuidof(ID3D12Device), (void**)&d3d12))) { backendType = 2; d3d12->Release(); }
+        }
+    }
+
+    if (!loggedOnce) { Log("hookPresent1 called, detected backend=%d", backendType); loggedOnce = true; }
+
+    CheckLimiter();
+
+    if (backendType == 1) RenderDX11((IDXGISwapChain*)pSwapChain);
+    else if (backendType == 2) RenderDX12((IDXGISwapChain*)pSwapChain);
+
+    if (g_fpPresent1) return g_fpPresent1(pSwapChain, SyncInterval, PresentFlags, pPresentParameters);
+    // fallback to normal Present if Present1 not hooked directly
+    if (g_fpPresent) return g_fpPresent((IDXGISwapChain*)pSwapChain, SyncInterval, 0);
+    return S_OK;
 }
 
 void InstallSwapChainHooks(IDXGISwapChain* pSwapChain) {
@@ -147,7 +188,25 @@ void InstallSwapChainHooks(IDXGISwapChain* pSwapChain) {
 
          MH_CreateHook(vtable[13], (LPVOID)hookResizeBuffers, (LPVOID*)&g_fpResizeBuffers);
          MH_EnableHook(vtable[13]);
-         Log("DXGI SwapChain Hooked!");
+         Log("DXGI SwapChain Hooked (Present / ResizeBuffers).");
+
+         // Try to hook Present1 on IDXGISwapChain1 (common in DX12 apps). Try multiple candidate indices and log results.
+         IDXGISwapChain1* sc1 = nullptr;
+         if (SUCCEEDED(pSwapChain->QueryInterface(__uuidof(IDXGISwapChain1), (void**)&sc1))) {
+             void** vtable1 = *reinterpret_cast<void***>(sc1);
+             int candidates[] = {20, 21};
+             for (int idx : candidates) {
+                 if (g_fpPresent1 == nullptr) {
+                     if (MH_CreateHook(vtable1[idx], (LPVOID)hookPresent1, (LPVOID*)&g_fpPresent1) == MH_OK) {
+                         MH_EnableHook(vtable1[idx]);
+                         Log("DXGI Present1 hooked at vtable[%d]", idx);
+                     } else {
+                         Log("Attempt to hook Present1 at vtable[%d] failed", idx);
+                     }
+                 }
+             }
+             sc1->Release();
+         }
     }
 }
 
@@ -179,6 +238,57 @@ void InstallFactoryHooks(IDXGIFactory* pFactory) {
         }
         pFactory2->Release();
     }
+}
+
+// Try to locate or create a command-queue vtable and hook ExecuteCommandLists.
+// Returns true if hook is installed.
+bool ScanForCommandQueueHooks()
+{
+    // Already hooked?
+    if (g_fpExecuteCommandLists) return true;
+
+    // If we already captured a command queue pointer earlier, try to hook its vtable directly.
+    if (g_CapturedCommandQueue) {
+        void** vtable = *reinterpret_cast<void***>(g_CapturedCommandQueue);
+        if (g_fpExecuteCommandLists == nullptr) {
+            if (MH_CreateHook(vtable[10], (LPVOID)hookExecuteCommandLists, (LPVOID*)&g_fpExecuteCommandLists) == MH_OK) {
+                MH_EnableHook(vtable[10]);
+                Log("ScanForCommandQueueHooks: hooked ExecuteCommandLists on captured queue (vtable[10])");
+                return true;
+            } else {
+                Log("ScanForCommandQueueHooks: failed to hook captured queue vtable[10]");
+            }
+        }
+    }
+
+    // Fallback: create a temporary D3D12 device & command queue to obtain a valid vtable entry to hook.
+    ID3D12Device* tempDevice = nullptr;
+    if (SUCCEEDED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), (void**)&tempDevice))) {
+        ID3D12CommandQueue* tempQueue = nullptr;
+        D3D12_COMMAND_QUEUE_DESC qd = {};
+        qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        qd.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+        if (SUCCEEDED(tempDevice->CreateCommandQueue(&qd, IID_PPV_ARGS(&tempQueue)))) {
+            void** vtable = *reinterpret_cast<void***>(tempQueue);
+            if (g_fpExecuteCommandLists == nullptr) {
+                if (MH_CreateHook(vtable[10], (LPVOID)hookExecuteCommandLists, (LPVOID*)&g_fpExecuteCommandLists) == MH_OK) {
+                    MH_EnableHook(vtable[10]);
+                    Log("ScanForCommandQueueHooks: hooked ExecuteCommandLists via temporary queue vtable[10]");
+                    tempQueue->Release();
+                    tempDevice->Release();
+                    return true;
+                } else {
+                    Log("ScanForCommandQueueHooks: failed to hook temporary queue vtable[10]");
+                }
+            }
+            tempQueue->Release();
+        }
+        tempDevice->Release();
+    } else {
+        Log("ScanForCommandQueueHooks: D3D12CreateDevice failed (no D3D12 available?)");
+    }
+
+    return false;
 }
 
 HRESULT __stdcall hookCreateDXGIFactory(REFIID riid, void** ppFactory) {

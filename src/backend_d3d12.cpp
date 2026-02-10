@@ -118,6 +118,16 @@ void RenderDX12(IDXGISwapChain* pSwapChain) {
                 g_pd3dSrvDescHeap->GetGPUDescriptorHandleForHeapStart());
 
             g_RendererName = "Start DirectX 12";
+
+            // Ensure font atlas and device objects are created to avoid ImGui assertion
+            // (legacy ImGui_ImplDX12_Init disables dynamic textures, so fonts must be built)
+            ImGuiIO& io = ImGui::GetIO();
+            unsigned char* pixels = nullptr; int width = 0, height = 0;
+            io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height); // build font atlas (sets TexIsBuilt)
+            if (!ImGui_ImplDX12_CreateDeviceObjects()) {
+                Log("ImGui: ImGui_ImplDX12_CreateDeviceObjects() failed!");
+            }
+
             g_init12 = true;
 
             // Try to capture or create CommandQueue
@@ -143,7 +153,14 @@ void RenderDX12(IDXGISwapChain* pSwapChain) {
 
         ImGui::Render();
 
-        UINT backBufferIdx = ((IDXGISwapChain3*)pSwapChain)->GetCurrentBackBufferIndex();
+        UINT backBufferIdx = 0;
+        IDXGISwapChain3* sc3 = nullptr;
+        if (SUCCEEDED(pSwapChain->QueryInterface(__uuidof(IDXGISwapChain3), (void**)&sc3))) {
+            backBufferIdx = sc3->GetCurrentBackBufferIndex();
+            sc3->Release();
+        } else {
+            Log("Warning: SwapChain does not support IDXGISwapChain3; using backBufferIdx=0");
+        }
         FrameContext* frameCtx = &g_FrameContext[backBufferIdx];
         
         frameCtx->CommandAllocator->Reset();
