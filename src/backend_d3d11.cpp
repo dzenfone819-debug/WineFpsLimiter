@@ -69,7 +69,6 @@ void RenderDX11(IDXGISwapChain* pSwapChain) {
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
         
-        CheckLimiter();
         RenderOverlay();
 
         ImGui::Render();

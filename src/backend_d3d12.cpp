@@ -66,13 +66,6 @@ void CleanupRenderTarget12() {
 }
 
 void RenderDX12(IDXGISwapChain* pSwapChain) {
-    if (!g_CapturedCommandQueue) {
-        // We haven't captured the queue yet. We can't render.
-        // This happens if the game created the queue before we hooked CreateCommandQueue.
-        // Or if we didn't hook D3D12 exports.
-        return; 
-    }
-
     if (!g_init12) {
         if (SUCCEEDED(pSwapChain->GetDevice(__uuidof(ID3D12Device), (void**)&g_pd3dDevice12))) {
             DXGI_SWAP_CHAIN_DESC desc;
@@ -126,15 +119,26 @@ void RenderDX12(IDXGISwapChain* pSwapChain) {
 
             g_RendererName = "Start DirectX 12";
             g_init12 = true;
+
+            // Try to capture or create CommandQueue
+            if (!g_CapturedCommandQueue) {
+                D3D12_COMMAND_QUEUE_DESC queueDesc = {};
+                queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+                queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+                if (FAILED(g_pd3dDevice12->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&g_CapturedCommandQueue)))) {
+                    Log("Failed to create CommandQueue for DX12");
+                    return;
+                }
+                Log("Created own CommandQueue for DX12");
+            }
         }
     }
 
-    if (g_init12) {
+    if (g_init12 && g_CapturedCommandQueue) {
         ImGui_ImplDX12_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
         
-        CheckLimiter();
         RenderOverlay();
 
         ImGui::Render();

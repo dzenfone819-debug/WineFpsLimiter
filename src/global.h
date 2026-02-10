@@ -21,6 +21,9 @@ struct Config {
     bool ShowSessionTime = false;
     bool ShowTotalTime = false;
     bool ShowRenderer = false;
+    bool ShowFPS = true;
+    bool ShowFrameTime = false;
+    bool ShowFrameGraph = false;
     long long TotalPlaytime = 0; 
 
     int HotkeyMode = 0; 

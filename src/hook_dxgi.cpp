@@ -131,6 +131,8 @@ HRESULT __stdcall hookPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UIN
         }
     }
 
+    CheckLimiter();
+
     if (backendType == 1) RenderDX11(pSwapChain);
     else if (backendType == 2) RenderDX12(pSwapChain);
 

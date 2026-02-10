@@ -37,6 +37,9 @@ struct GameProfile {
     // Time
     bool ShowTotalTime = false;
     bool ShowRenderer = false; // New
+    bool ShowFPS = true;
+    bool ShowFrameTime = false;
+    bool ShowFrameGraph = false;
     long long TotalPlaytime = 0; // In seconds
 
     // Runtime
@@ -135,7 +138,7 @@ void SaveGames() {
             << g.EnableBgLimit << "|" << g.BgFPS << "|"
             << g.ShowClock << "|" << g.ShowTimer << "|"
             << g.HotkeyMode << "|" << g.StartVisible << "|" << g.ShowRenderer << "|"
-            << g.ShowTotalTime << "|" << g.TotalPlaytime << "\n";
+            << g.ShowTotalTime << "|" << g.ShowFPS << "|" << g.ShowFrameTime << "|" << g.ShowFrameGraph << "|" << g.TotalPlaytime << "\n";
     }
 }
 
@@ -182,7 +185,10 @@ void LoadGames() {
                 if (seglist.size() > 9) g.StartVisible = std::stoi(seglist[9]);
                 if (seglist.size() > 10) g.ShowRenderer = std::stoi(seglist[10]);
                 if (seglist.size() > 11) g.ShowTotalTime = std::stoi(seglist[11]);
-                if (seglist.size() > 12) g.TotalPlaytime = std::stoll(seglist[12]);
+                if (seglist.size() > 12) g.ShowFPS = std::stoi(seglist[12]);
+                if (seglist.size() > 13) g.ShowFrameTime = std::stoi(seglist[13]);
+                if (seglist.size() > 14) g.ShowFrameGraph = std::stoi(seglist[14]);
+                if (seglist.size() > 15) g.TotalPlaytime = std::stoll(seglist[15]);
                 g_Games.push_back(g);
                 count--;
             } catch (...) {}
@@ -226,6 +232,9 @@ void Inject(const GameProfile& game, HWND hwndLauncher) {
     
     WritePrivateProfileStringA("Settings", "ShowRenderer", std::to_string(game.ShowRenderer).c_str(), configPath.c_str());
     WritePrivateProfileStringA("Settings", "ShowTotalTime", std::to_string(game.ShowTotalTime).c_str(), configPath.c_str());
+    WritePrivateProfileStringA("Settings", "ShowFPS", std::to_string(game.ShowFPS).c_str(), configPath.c_str());
+    WritePrivateProfileStringA("Settings", "ShowFrameTime", std::to_string(game.ShowFrameTime).c_str(), configPath.c_str());
+    WritePrivateProfileStringA("Settings", "ShowFrameGraph", std::to_string(game.ShowFrameGraph).c_str(), configPath.c_str());
     WritePrivateProfileStringA("Settings", "TotalPlaytime", std::to_string(finalTime).c_str(), configPath.c_str());
 
     DWORD binType = 0;
@@ -500,6 +509,9 @@ int main(int, char**) {
                 ImGui::Checkbox("Show Renderer Info", &g.ShowRenderer);
                 ImGui::Checkbox("Show Session Timer", &g.ShowTimer);
                 ImGui::Checkbox("Show Total Time", &g.ShowTotalTime);
+                ImGui::Checkbox("Show FPS", &g.ShowFPS);
+                ImGui::Checkbox("Show Frame Time", &g.ShowFrameTime);
+                ImGui::Checkbox("Show Frame Graph", &g.ShowFrameGraph);
 
                 ImGui::Spacing();
                 ImGui::Separator();

@@ -18,6 +18,7 @@ std::chrono::steady_clock::time_point g_StartupTime;
 std::chrono::steady_clock::time_point g_LastSaveTime;
 std::chrono::high_resolution_clock::time_point g_lastFrameTime;
 std::vector<float>* frame_times = nullptr;
+float g_lastFrameTimeMs = 0.0f;
 HWND g_hWnd = nullptr;
 WNDPROC g_oWndProc = nullptr;
 static FILE* logFile = nullptr;
@@ -59,6 +60,9 @@ void SaveConfig() {
     WritePrivateProfileStringA("Settings", "ShowSessionTime", std::to_string(g_Config.ShowSessionTime).c_str(), configPath.c_str());
     WritePrivateProfileStringA("Settings", "ShowTotalTime", std::to_string(g_Config.ShowTotalTime).c_str(), configPath.c_str());
     WritePrivateProfileStringA("Settings", "ShowRenderer", std::to_string(g_Config.ShowRenderer).c_str(), configPath.c_str());
+    WritePrivateProfileStringA("Settings", "ShowFPS", std::to_string(g_Config.ShowFPS).c_str(), configPath.c_str());
+    WritePrivateProfileStringA("Settings", "ShowFrameTime", std::to_string(g_Config.ShowFrameTime).c_str(), configPath.c_str());
+    WritePrivateProfileStringA("Settings", "ShowFrameGraph", std::to_string(g_Config.ShowFrameGraph).c_str(), configPath.c_str());
     WritePrivateProfileStringA("Settings", "HotkeyMode", std::to_string(g_Config.HotkeyMode).c_str(), configPath.c_str());
     WritePrivateProfileStringA("Settings", "TotalPlaytime", std::to_string(currentTotal).c_str(), configPath.c_str());
 }
@@ -80,6 +84,9 @@ void LoadConfig() {
     g_Config.ShowSessionTime = GetPrivateProfileIntA("Settings", "ShowSessionTime", 0, configPath.c_str());
     g_Config.ShowTotalTime = GetPrivateProfileIntA("Settings", "ShowTotalTime", 0, configPath.c_str());
     g_Config.ShowRenderer = GetPrivateProfileIntA("Settings", "ShowRenderer", 0, configPath.c_str());
+    g_Config.ShowFPS = GetPrivateProfileIntA("Settings", "ShowFPS", 1, configPath.c_str());
+    g_Config.ShowFrameTime = GetPrivateProfileIntA("Settings", "ShowFrameTime", 0, configPath.c_str());
+    g_Config.ShowFrameGraph = GetPrivateProfileIntA("Settings", "ShowFrameGraph", 0, configPath.c_str());
     g_Config.HotkeyMode = GetPrivateProfileIntA("Settings", "HotkeyMode", 0, configPath.c_str());
     
     char buf[32];
@@ -133,6 +140,8 @@ void CheckLimiter() {
         if (frame_times->size() > 100) frame_times->erase(frame_times->begin());
     }
 
+    g_lastFrameTimeMs = dt.count();
+
     int target = g_Config.TargetFPS;
     if (g_Config.EnableBackgroundLimit && GetForegroundWindow() != g_hWnd) {
         target = g_Config.BackgroundFPS;
@@ -152,6 +161,8 @@ void CheckLimiter() {
 }
 
 void RenderOverlay() {
+    if (!frame_times) frame_times = new std::vector<float>();
+
     if (std::chrono::steady_clock::now() - g_LastSaveTime > std::chrono::seconds(30)) {
         SaveConfig();
         g_LastSaveTime = std::chrono::steady_clock::now();
@@ -160,10 +171,6 @@ void RenderOverlay() {
     if (g_Config.ShowMenu) {
         ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("FPS Control", &g_Config.ShowMenu, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::TextColored(ImVec4(0,1,0,1), "FPS: %.1f", ImGui::GetIO().Framerate);
-            if (frame_times && !frame_times->empty()) {
-                ImGui::PlotLines("##dt", frame_times->data(), (int)frame_times->size(), 0, NULL, 0.0f, 33.0f, ImVec2(0, 50));
-            }
             ImGui::Separator();
             if (ImGui::Checkbox("FPS Limit", &g_Config.EnableStartLimit)) SaveConfig();
             if (g_Config.EnableStartLimit) {
@@ -178,6 +185,9 @@ void RenderOverlay() {
             if (ImGui::Checkbox("Timer", &g_Config.ShowSessionTime)) SaveConfig();
             if (ImGui::Checkbox("Total Time", &g_Config.ShowTotalTime)) SaveConfig();
             if (ImGui::Checkbox("Renderer", &g_Config.ShowRenderer)) SaveConfig();
+            if (ImGui::Checkbox("Show FPS", &g_Config.ShowFPS)) SaveConfig();
+            if (ImGui::Checkbox("Frame Time", &g_Config.ShowFrameTime)) SaveConfig();
+            if (ImGui::Checkbox("Frame Graph", &g_Config.ShowFrameGraph)) SaveConfig();
             ImGui::Separator();
             const char* items[] = { "Shift+Tab", "Backspace", "Insert", "Home", "F12", "F11" };
             if (ImGui::Combo("Hotkey", &g_Config.HotkeyMode, items, IM_ARRAYSIZE(items))) SaveConfig();
@@ -185,13 +195,21 @@ void RenderOverlay() {
         ImGui::End();
     }
 
-    if (g_Config.ShowClock || g_Config.ShowSessionTime || g_Config.ShowTotalTime || g_Config.ShowRenderer) {
+    if (g_Config.ShowClock || g_Config.ShowSessionTime || g_Config.ShowTotalTime || g_Config.ShowRenderer || g_Config.ShowFPS || g_Config.ShowFrameTime || g_Config.ShowFrameGraph) {
             ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 10, 10), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
             ImGui::SetNextWindowBgAlpha(0.3f);
             ImGui::Begin("OverlayStats", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
             
             if (g_Config.ShowRenderer) {
-                ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "%s", g_RendererName.c_str());
+                ImGui::Text("%s", g_RendererName.c_str());
+            }
+
+            if (g_Config.ShowFPS) {
+                ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
+            }
+
+            if (g_Config.ShowFrameTime) {
+                ImGui::Text("Frame Time: %.2f ms", g_lastFrameTimeMs);
             }
 
             if (g_Config.ShowClock) {
@@ -220,6 +238,13 @@ void RenderOverlay() {
                 int m = (total % 3600) / 60;
                 ImGui::Text("TOTAL: %dh %dm", h, m);
             }
+
+            if (g_Config.ShowFrameGraph && frame_times && !frame_times->empty()) {
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.1f, 0.1f, 1.0f)); // Dark background for graph
+                ImGui::PlotLines("##FrameGraph", frame_times->data(), (int)frame_times->size(), 0, NULL, 0.0f, 33.0f, ImVec2(0, 50));
+                ImGui::PopStyleColor();
+            }
+
             ImGui::End();
     }
 }
