@@ -83,6 +83,8 @@ void SaveConfig() {
     WritePrivateProfileStringA("Settings", "ShowFrameGraph", std::to_string(g_Config.ShowFrameGraph).c_str(), configPath.c_str());
     WritePrivateProfileStringA("Settings", "HotkeyMode", std::to_string(g_Config.HotkeyMode).c_str(), configPath.c_str());
     WritePrivateProfileStringA("Settings", "TotalPlaytime", std::to_string(currentTotal).c_str(), configPath.c_str());
+    WritePrivateProfileStringA("Settings", "OverlayPosX", std::to_string(g_Config.OverlayPosX).c_str(), configPath.c_str());
+    WritePrivateProfileStringA("Settings", "OverlayPosY", std::to_string(g_Config.OverlayPosY).c_str(), configPath.c_str());
 }
 
 void LoadConfig() {
@@ -110,6 +112,12 @@ void LoadConfig() {
     char buf[32];
     GetPrivateProfileStringA("Settings", "TotalPlaytime", "0", buf, 32, configPath.c_str());
     g_Config.TotalPlaytime = strtoll(buf, NULL, 10);
+    // Overlay position (floats)
+    char buf2[64];
+    GetPrivateProfileStringA("Settings", "OverlayPosX", "-1", buf2, 64, configPath.c_str());
+    g_Config.OverlayPosX = (float)atof(buf2);
+    GetPrivateProfileStringA("Settings", "OverlayPosY", "-1", buf2, 64, configPath.c_str());
+    g_Config.OverlayPosY = (float)atof(buf2);
 }
 
 // --- ImGui Logic ---
@@ -267,10 +275,27 @@ void RenderOverlay() {
     }
 
     if (g_Config.ShowClock || g_Config.ShowSessionTime || g_Config.ShowTotalTime || g_Config.ShowRenderer || g_Config.ShowFPS || g_Config.ShowFrameTime || g_Config.ShowFrameGraph) {
-            ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 10, 10), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+            ImGuiIO& io = ImGui::GetIO();
+
+            static ImVec2 overlayPos;
+            static bool overlayPosInit = false;
+                if (!overlayPosInit) {
+                if (g_Config.OverlayPosX >= 0.0f && g_Config.OverlayPosY >= 0.0f) {
+                    overlayPos = ImVec2(g_Config.OverlayPosX, g_Config.OverlayPosY);
+                } else {
+                    // Default: a bit left from the right edge and slightly lower so it is fully onscreen
+                    float defaultX = io.DisplaySize.x - 260.0f;
+                    if (defaultX < 10.0f) defaultX = io.DisplaySize.x - 120.0f;
+                    float defaultY = 40.0f;
+                    overlayPos = ImVec2(defaultX, defaultY);
+                }
+                overlayPosInit = true;
+            }
+
+            ImGui::SetNextWindowPos(overlayPos, ImGuiCond_Always);
             ImGui::SetNextWindowBgAlpha(0.3f);
             ImGui::Begin("OverlayStats", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
-            
+
             if (g_Config.ShowRenderer) {
                 ImGui::Text("%s", g_RendererName.c_str());
             }
@@ -316,6 +341,24 @@ void RenderOverlay() {
                 ImGui::PopStyleColor();
             }
 
+            // Allow dragging the overlay when HUD menu is visible
+            if (g_Config.ShowMenu) {
+                if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::IsMouseDragging(0)) {
+                    overlayPos.x += io.MouseDelta.x;
+                    overlayPos.y += io.MouseDelta.y;
+                    // Clamp to screen
+                    if (overlayPos.x < 0.0f) overlayPos.x = 0.0f;
+                    if (overlayPos.y < 0.0f) overlayPos.y = 0.0f;
+                    if (overlayPos.x > io.DisplaySize.x - 20.0f) overlayPos.x = io.DisplaySize.x - 20.0f;
+                    if (overlayPos.y > io.DisplaySize.y - 20.0f) overlayPos.y = io.DisplaySize.y - 20.0f;
+                }
+                if (ImGui::IsMouseReleased(0)) {
+                    g_Config.OverlayPosX = overlayPos.x;
+                    g_Config.OverlayPosY = overlayPos.y;
+                    SaveConfig();
+                }
+            }
+
             ImGui::End();
     }
 }
@@ -324,6 +367,7 @@ void RenderOverlay() {
 extern void InitDX9Hook();
 extern void InitDXGIHook();
 extern void InitOpenGLHook();
+extern void InitVulkanHook(); // Added Prototype
 
 DWORD WINAPI MainThread(LPVOID lpReserved) {
     g_StartupTime = std::chrono::steady_clock::now();
@@ -345,6 +389,7 @@ DWORD WINAPI MainThread(LPVOID lpReserved) {
         InitDX9Hook();
         InitDXGIHook();
         InitOpenGLHook();
+        InitVulkanHook(); // Initialize Vulkan Hook
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 

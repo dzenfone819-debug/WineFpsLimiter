@@ -27,6 +27,9 @@ struct Config {
     long long TotalPlaytime = 0; 
 
     int HotkeyMode = 1; 
+    // Overlay position (top-left in pixels). If negative, use default anchored to top-right.
+    float OverlayPosX = -1.0f;
+    float OverlayPosY = -1.0f;
 };
 
 // --- Shared Globals ---
