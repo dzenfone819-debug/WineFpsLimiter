@@ -26,7 +26,7 @@ struct Config {
     bool ShowFrameGraph = false;
     long long TotalPlaytime = 0; 
 
-    int HotkeyMode = 0; 
+    int HotkeyMode = 1; 
 };
 
 // --- Shared Globals ---

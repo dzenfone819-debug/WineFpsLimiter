@@ -1,5 +1,6 @@
 #include "global.h"
 #include <windows.h>
+#include <mmsystem.h>
 #include <cstdio>
 #include <vector>
 #include <thread>
@@ -22,6 +23,23 @@ float g_lastFrameTimeMs = 0.0f;
 HWND g_hWnd = nullptr;
 WNDPROC g_oWndProc = nullptr;
 static FILE* logFile = nullptr;
+static bool g_timePeriodSet = false;
+static bool g_cursorShown = true;
+static HANDLE g_highResTimer = NULL;
+
+static void HighPrecisionSleep(double ms) {
+    if (ms <= 0.0) return;
+    if (!g_highResTimer) {
+        g_highResTimer = CreateWaitableTimer(NULL, TRUE, NULL);
+        if (!g_highResTimer) return;
+    }
+    // dueTime in 100-nanosecond intervals; negative for relative time
+    LARGE_INTEGER due;
+    due.QuadPart = -(LONGLONG)(ms * 10000.0);
+    // Set single-shot timer
+    if (!SetWaitableTimer(g_highResTimer, &due, 0, NULL, NULL, FALSE)) return;
+    WaitForSingleObject(g_highResTimer, INFINITE);
+}
 
 // --- Helper Impl ---
 void Log(const char* fmt, ...) {
@@ -87,7 +105,7 @@ void LoadConfig() {
     g_Config.ShowFPS = GetPrivateProfileIntA("Settings", "ShowFPS", 1, configPath.c_str());
     g_Config.ShowFrameTime = GetPrivateProfileIntA("Settings", "ShowFrameTime", 0, configPath.c_str());
     g_Config.ShowFrameGraph = GetPrivateProfileIntA("Settings", "ShowFrameGraph", 0, configPath.c_str());
-    g_Config.HotkeyMode = GetPrivateProfileIntA("Settings", "HotkeyMode", 0, configPath.c_str());
+    g_Config.HotkeyMode = GetPrivateProfileIntA("Settings", "HotkeyMode", 1, configPath.c_str());
     
     char buf[32];
     GetPrivateProfileStringA("Settings", "TotalPlaytime", "0", buf, 32, configPath.c_str());
@@ -100,10 +118,7 @@ void LoadConfig() {
 extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    if (ImGui_ImplWin32_WndProcHandler(hWnd, uMsg, wParam, lParam))
-        return true;
-    
-    // Hotkey Handling
+    // First: handle hotkey toggle unconditionally so we can open the HUD even when forwarding input.
     bool toggle = false;
     switch(g_Config.HotkeyMode) {
         case 0: if ((GetAsyncKeyState(VK_SHIFT) & 0x8000) && (uMsg == WM_KEYDOWN && wParam == VK_TAB)) toggle = true; break; // Shift+Tab
@@ -117,6 +132,58 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     if (toggle) {
         g_Config.ShowMenu = !g_Config.ShowMenu;
         SaveConfig();
+        if (g_Config.ShowMenu) {
+            SetCursor(LoadCursor(NULL, IDC_ARROW));
+            g_cursorShown = true;
+        } else {
+            SetCursor(NULL);
+            g_cursorShown = false;
+            if (g_hWnd && IsWindow(g_hWnd)) {
+                SetForegroundWindow(g_hWnd);
+                SetFocus(g_hWnd);
+                PostMessage(g_hWnd, WM_MOUSEMOVE, 0, 0);
+            }
+        }
+        // If we just toggled the HUD open, consume this key press so the game doesn't also process it.
+        if (g_Config.ShowMenu) return 0;
+    }
+
+    // If HUD is hidden, forward all input to the game (we already handled the hotkey).
+    if (!g_Config.ShowMenu) {
+        if (g_oWndProc)
+            return CallWindowProc(g_oWndProc, hWnd, uMsg, wParam, lParam);
+        return DefWindowProc(hWnd, uMsg, wParam, lParam);
+    }
+
+    // HUD is visible: let ImGui handle the message and decide whether it wants to capture it.
+    ImGui_ImplWin32_WndProcHandler(hWnd, uMsg, wParam, lParam);
+    ImGuiIO& io_for_msg = ImGui::GetIO();
+
+    // Debug: log VK_MENU (Alt) keyboard messages to diagnose Alt hold issue
+    if ((uMsg == WM_SYSKEYDOWN || uMsg == WM_SYSKEYUP || uMsg == WM_KEYDOWN || uMsg == WM_KEYUP) && (wParam == VK_MENU)) {
+        HWND fg = GetForegroundWindow();
+        HWND foc = GetFocus();
+        int vk_state = (GetKeyState(VK_MENU) & 0x8000) ? 1 : 0;
+        Log("WndProc VK_MENU msg=%u ShowMenu=%d WantCaptureKB=%d FG=%p FOC=%p GetKeyState(VK_MENU)=%d",
+            (unsigned)uMsg,
+            g_Config.ShowMenu ? 1 : 0,
+            io_for_msg.WantCaptureKeyboard ? 1 : 0,
+            fg, foc, vk_state);
+    }
+
+    // If ImGui wants to capture input AND our HUD is visible, consume the message.
+    if (g_Config.ShowMenu && (io_for_msg.WantCaptureMouse || io_for_msg.WantCaptureKeyboard)) {
+        // Allow Alt (VK_MENU) and system-key messages to pass through to the game
+        // so holding Alt (WM_SYSKEYDOWN/WM_SYSKEYUP) still works in-game.
+        if (uMsg == WM_SYSKEYDOWN || uMsg == WM_SYSKEYUP ||
+            (uMsg == WM_KEYDOWN && wParam == VK_MENU) || (uMsg == WM_KEYUP && wParam == VK_MENU))
+        {
+            if (g_oWndProc)
+                return CallWindowProc(g_oWndProc, hWnd, uMsg, wParam, lParam);
+            return DefWindowProc(hWnd, uMsg, wParam, lParam);
+        }
+
+        return true;
     }
 
     if (g_oWndProc)
@@ -151,8 +218,12 @@ void CheckLimiter() {
         double frameTimeMin = 1000.0 / target;
         std::chrono::duration<double, std::milli> elapsed = std::chrono::high_resolution_clock::now() - now;
         if (elapsed.count() < frameTimeMin) {
-            DWORD sleepTime = (DWORD)(frameTimeMin - elapsed.count());
-            if (sleepTime > 1) Sleep(sleepTime - 1);
+            double rem = frameTimeMin - elapsed.count();
+            // Use high-precision wait for the bulk of the sleep
+            if (rem > 2.0) {
+                HighPrecisionSleep(rem - 1.0);
+            }
+            // Spin-wait for the final few ms to reduce oversleep
             while ((std::chrono::high_resolution_clock::now() - now).count() < frameTimeMin) {
                 // spin
             }
@@ -261,6 +332,14 @@ DWORD WINAPI MainThread(LPVOID lpReserved) {
     
     if (MH_Initialize() != MH_OK) return FALSE;
 
+    // Improve Sleep() resolution for the limiter (reduces jitter)
+    if (timeBeginPeriod(1) == TIMERR_NOERROR) {
+        g_timePeriodSet = true;
+        Log("timeBeginPeriod(1) set");
+    } else {
+        Log("timeBeginPeriod(1) failed");
+    }
+
     // Retry loop for late loading modules
     for (int i = 0; i < 15; i++) {
         InitDX9Hook();
@@ -296,6 +375,11 @@ BOOL WINAPI DllMain(HMODULE hModule, DWORD dwReason, LPVOID lpReserved) {
     case DLL_PROCESS_DETACH:
         SaveConfig();
         if (logFile) fclose(logFile);
+        if (g_timePeriodSet) {
+            timeEndPeriod(1);
+            Log("timeEndPeriod(1) called");
+            g_timePeriodSet = false;
+        }
         MH_Uninitialize();
         break;
     }

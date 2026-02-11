@@ -68,7 +68,7 @@ file(GLOB IMGUI_SOURCES
 # ----------------------------------------------------
 add_executable(FPSLauncher src/launcher.cpp ${IMGUI_SOURCES})
 target_include_directories(FPSLauncher PRIVATE ${IMGUI_DIR} ${IMGUI_DIR}/backends)
-target_link_libraries(FPSLauncher PRIVATE comdlg32 shlwapi d3d11 dxgi d3dcompiler dwmapi)
+target_link_libraries(FPSLauncher PRIVATE comdlg32 shlwapi d3d11 dxgi d3dcompiler dwmapi winmm)
 target_link_options(FPSLauncher PRIVATE -static -static-libgcc -static-libstdc++)
 
 # ----------------------------------------------------
@@ -91,5 +91,5 @@ target_include_directories(FPSLimiter PRIVATE
     ${IMGUI_DIR}/backends
 )
 
-target_link_libraries(FPSLimiter PRIVATE minhook d3d11 dxgi d3dcompiler dwmapi d3d9 d3d12 opengl32)
+target_link_libraries(FPSLimiter PRIVATE minhook d3d11 dxgi d3dcompiler dwmapi d3d9 d3d12 opengl32 winmm)
 target_link_options(FPSLimiter PRIVATE -static -static-libgcc -static-libstdc++)
