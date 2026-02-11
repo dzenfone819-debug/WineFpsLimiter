@@ -12,7 +12,6 @@ extern void CleanupDX12();
 
 // --- Globals ---
 ID3D12CommandQueue* g_CapturedCommandQueue = nullptr;
-// No g_LastCommandQueue anymore
 
 // --- Forward Declarations ---
 void InstallSwapChainHooks(IDXGISwapChain* pSwapChain);
@@ -61,9 +60,8 @@ ExecuteCommandLists_t g_fpExecuteCommandLists = nullptr;
 // --- Hook Implementations ---
 
 // ExecuteCommandLists hook: capture the game's direct command queue when called.
-// We keep this as a fallback, but rely on SwapChain creation if possible.
 void __stdcall hookExecuteCommandLists(ID3D12CommandQueue* pQueue, UINT NumCommandLists, ID3D12CommandList* const* ppCommandLists) {
-    if (pQueue && g_CapturedCommandQueue == nullptr && pQueue->GetDesc().Type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
+    if (pQueue && pQueue->GetDesc().Type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
         g_CapturedCommandQueue = pQueue;
         Log("Captured DX12 CommandQueue via ExecuteCommandLists: %p", pQueue);
     }
@@ -213,37 +211,12 @@ void InstallSwapChainHooks(IDXGISwapChain* pSwapChain) {
 }
 
 HRESULT __stdcall hookCreateSwapChain(IDXGIFactory* pFactory, IUnknown* pDevice, DXGI_SWAP_CHAIN_DESC* pDesc, IDXGISwapChain** ppSwapChain) {
-    // Capture Command Queue from pDevice (DX12)
-    ID3D12CommandQueue* queue = nullptr;
-    if (SUCCEEDED(pDevice->QueryInterface(__uuidof(ID3D12CommandQueue), (void**)&queue))) {
-        if (g_CapturedCommandQueue == nullptr) {
-            g_CapturedCommandQueue = queue;
-            Log("Captured DX12 CommandQueue via CreateSwapChain: %p", queue);
-        }
-        // Don't release, we keep the weak ref (unless we manage refcount properly?)
-        // Standard hook practice: capture raw pointer.
-        // But we incremented refcount via QI. We should release it?
-        // Wait, if we release, the pointer is valid as long as the game holds it.
-        // Yes.
-        queue->Release();
-    }
-
     HRESULT hr = g_fpCreateSwapChain(pFactory, pDevice, pDesc, ppSwapChain);
     if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) InstallSwapChainHooks(*ppSwapChain);
     return hr;
 }
 
 HRESULT __stdcall hookCreateSwapChainForHwnd(IDXGIFactory2* pFactory, IUnknown* pDevice, HWND hWnd, const DXGI_SWAP_CHAIN_DESC1* pDesc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFullDesc, IDXGIOutput* pRestrictToOutput, IDXGISwapChain1** ppSwapChain) {
-    // Capture Command Queue from pDevice (DX12)
-    ID3D12CommandQueue* queue = nullptr;
-    if (SUCCEEDED(pDevice->QueryInterface(__uuidof(ID3D12CommandQueue), (void**)&queue))) {
-        if (g_CapturedCommandQueue == nullptr) {
-            g_CapturedCommandQueue = queue;
-            Log("Captured DX12 CommandQueue via CreateSwapChainForHwnd: %p", queue);
-        }
-        queue->Release();
-    }
-
     HRESULT hr = g_fpCreateSwapChainForHwnd(pFactory, pDevice, hWnd, pDesc, pFullDesc, pRestrictToOutput, ppSwapChain);
     if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) InstallSwapChainHooks(*ppSwapChain);
     return hr;
